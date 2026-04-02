@@ -1,0 +1,49 @@
+----------------------------------------------------------------
+VBA MACRO — Module1 in EOS_Import_Template.xlsm
+----------------------------------------------------------------
+Hoe toevoegen:
+1. Open EOS_Import_Template.xlsm op de RDP server
+2. Druk op Alt + F11
+3. Invoegen → Module
+4. Plak onderstaande code
+5. Ctrl + S opslaan
+6. VBA editor sluiten
+----------------------------------------------------------------
+
+Sub VerversEnOpslaan()
+    
+    Dim sResultaatPad As String
+    Dim iFile As Integer
+    
+    sResultaatPad = "C:\Temp\eos_refresh_result.txt"
+    
+    On Error GoTo Fout
+    
+    ' Alle PowerQuery verbindingen vernieuwen
+    ThisWorkbook.RefreshAll
+    
+    ' Wachten tot alle async queries klaar zijn
+    Application.CalculateUntilAsyncQueriesDone
+    
+    ' Extra wachttijd voor trage verbindingen
+    Application.Wait Now + TimeValue("00:00:05")
+    
+    ' Opslaan
+    ThisWorkbook.Save
+    
+    ' Resultaat wegschrijven naar tekstbestand
+    iFile = FreeFile
+    Open sResultaatPad For Output As #iFile
+    Print #iFile, "SUCCES"
+    Close #iFile
+    
+    Exit Sub
+
+Fout:
+    ' Foutmelding wegschrijven naar tekstbestand
+    iFile = FreeFile
+    Open sResultaatPad For Output As #iFile
+    Print #iFile, "FOUT:" & Err.Number & " - " & Err.Description
+    Close #iFile
+
+End Sub
