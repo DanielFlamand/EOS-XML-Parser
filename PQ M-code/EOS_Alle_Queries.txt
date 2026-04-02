@@ -1,0 +1,490 @@
+================================================================
+EOS XML IMPORT — ALLE POWERQUERY QUERIES (DEFINITIEF)
+================================================================
+Instructie:
+1. Maak een nieuw leeg Excel bestand
+2. Sla op als EOS_Import_Template.xlsx in de map EOS XML aanlevering
+3. Voor elke query hieronder:
+   - Gegevens → Gegevens ophalen → Lege query
+   - Geavanceerde editor openen
+   - Bestaande tekst verwijderen
+   - Code plakken → Gereed
+   - Query hernoemen naar de naam boven het blok
+   - Alle Bron_ en Logica_ queries: rechtermuisknop → Laden naar → Alleen verbinding
+   - EOS_Eindtabel: laden naar tabel in tabblad "Import"
+   - Validatie_Checks: laden naar tabel in tabblad "Validatie"
+
+Volgorde van aanmaken:
+Bron_ queries eerst, dan Logica_ queries, dan EOS_Eindtabel, dan Validatie_Checks
+================================================================
+
+
+----------------------------------------------------------------
+QUERY 1: Bron_RuweData
+----------------------------------------------------------------
+let
+    RuweDataMap = "C:\Users\dflamand\Ultimoo Groep\Proces & Innovatie - IT support en development - IT support en development\PowerQuery\EOS XML aanlevering\EOS XML Output Excel",
+
+    MapInhoud       = Folder.Files(RuweDataMap),
+    AlleenXlsx      = Table.SelectRows(MapInhoud, each Text.EndsWith([Name], ".xlsx")),
+    Gesorteerd      = Table.Sort(AlleenXlsx, {{"Date modified", Order.Descending}}),
+    NieuwsteBestand = Gesorteerd{0}[Content],
+
+    ExcelInhoud  = Excel.Workbook(NieuwsteBestand),
+    ImportSheet  = ExcelInhoud{[Item="Import", Kind="Sheet"]}[Data],
+
+    MetHeaders = Table.PromoteHeaders(
+                     Table.Skip(ImportSheet, 1),
+                     [PromoteAllScalars=true]
+                 )
+in
+    MetHeaders
+
+
+----------------------------------------------------------------
+QUERY 2: Bron_Klanten
+----------------------------------------------------------------
+let
+    ConfigBestand = "C:\Users\dflamand\Ultimoo Groep\Proces & Innovatie - IT support en development - IT support en development\PowerQuery\EOS XML aanlevering\EOS_Configuratie.xlsx",
+
+    Raw     = Excel.Workbook(File.Contents(ConfigBestand)){[Item="Klanten", Kind="Sheet"]}[Data],
+    Headers = Table.PromoteHeaders(Raw, [PromoteAllScalars=true]),
+    Schoon  = Table.SelectColumns(Headers, {
+                  "CLIENT_NAME (uit XML)",
+                  "Mapsjabloon (Klant-ID)"
+              })
+in
+    Schoon
+
+
+----------------------------------------------------------------
+QUERY 3: Bron_GenderCodes
+----------------------------------------------------------------
+let
+    ConfigBestand = "C:\Users\dflamand\Ultimoo Groep\Proces & Innovatie - IT support en development - IT support en development\PowerQuery\EOS XML aanlevering\EOS_Configuratie.xlsx",
+
+    Raw     = Excel.Workbook(File.Contents(ConfigBestand)){[Item="Codes_GENDER", Kind="Sheet"]}[Data],
+    Headers = Table.PromoteHeaders(Raw, [PromoteAllScalars=true]),
+    Schoon  = Table.SelectColumns(Headers, {"XML waarde", "Systeemcode"})
+in
+    Schoon
+
+
+----------------------------------------------------------------
+QUERY 4: Bron_BusinessLineCodes
+----------------------------------------------------------------
+let
+    ConfigBestand = "C:\Users\dflamand\Ultimoo Groep\Proces & Innovatie - IT support en development - IT support en development\PowerQuery\EOS XML aanlevering\EOS_Configuratie.xlsx",
+
+    Raw     = Excel.Workbook(File.Contents(ConfigBestand)){[Item="Codes_BUSINESS_LINE", Kind="Sheet"]}[Data],
+    Headers = Table.PromoteHeaders(Raw, [PromoteAllScalars=true]),
+    Schoon  = Table.SelectColumns(Headers, {"XML waarde", "Systeemcode"})
+in
+    Schoon
+
+
+----------------------------------------------------------------
+QUERY 5: Bron_Factuuromschrijvingen
+----------------------------------------------------------------
+let
+    ConfigBestand = "C:\Users\dflamand\Ultimoo Groep\Proces & Innovatie - IT support en development - IT support en development\PowerQuery\EOS XML aanlevering\EOS_Configuratie.xlsx",
+
+    Raw     = Excel.Workbook(File.Contents(ConfigBestand)){[Item="Factuuromschrijvingen", Kind="Sheet"]}[Data],
+    Headers = Table.PromoteHeaders(Raw, [PromoteAllScalars=true]),
+    Schoon  = Table.SelectColumns(Headers, {
+                  "CLIENT_NAME (uit XML)",
+                  "Standaard omschrijving"
+              })
+in
+    Schoon
+
+
+----------------------------------------------------------------
+QUERY 6: Logica_Lookups
+----------------------------------------------------------------
+let
+    Bron = Bron_RuweData,
+
+    // PCT_CLIENT_NAME eerst corrigeren vanuit ADDITIONAL_INFORMATION
+    MetClientNaamCorrect = Table.AddColumn(Bron, "PCT_CLIENT_NAME_NIEUW", each
+        if [ADDITIONAL_INFORMATION] <> null and [ADDITIONAL_INFORMATION] <> ""
+        then Text.AfterDelimiter([ADDITIONAL_INFORMATION], "origin creditor: ")
+        else [PCT_CLIENT_NAME]
+    , type text),
+    ZonderOud   = Table.RemoveColumns(MetClientNaamCorrect, {"PCT_CLIENT_NAME"}),
+    MetHernoemd = Table.RenameColumns(ZonderOud, {{"PCT_CLIENT_NAME_NIEUW", "PCT_CLIENT_NAME"}}),
+
+    // Tijdelijke lowercase kolom voor hoofdletterongevoelige matching
+    MetLowerCase = Table.AddColumn(MetHernoemd, "PCT_CLIENT_NAME_LOWER",
+        each Text.Lower([PCT_CLIENT_NAME]), type text),
+
+    KlantenMetLower = Table.AddColumn(Bron_Klanten, "CLIENT_NAME_LOWER",
+        each Text.Lower([#"CLIENT_NAME (uit XML)"]), type text),
+
+    // Koppel Mapsjabloon op basis van PCT_CLIENT_NAME
+    MetMapsjabloon = Table.NestedJoin(
+        MetLowerCase, "PCT_CLIENT_NAME_LOWER",
+        KlantenMetLower, "CLIENT_NAME_LOWER",
+        "KlantLookup", JoinKind.LeftOuter
+    ),
+    MapsjabloonUitgeklapt = Table.ExpandTableColumn(
+        MetMapsjabloon, "KlantLookup",
+        {"Mapsjabloon (Klant-ID)"}, {"MAPSJABLOON"}
+    ),
+
+    // Tijdelijke lowercase kolom verwijderen
+    ZonderLower = Table.RemoveColumns(MapsjabloonUitgeklapt, {"PCT_CLIENT_NAME_LOWER"}),
+
+    // Koppel BUSINESS_LINE systeemcode
+    MetBL = Table.NestedJoin(
+        ZonderLower, "BUSINESS_LINE",
+        Bron_BusinessLineCodes, "XML waarde",
+        "BLLookup", JoinKind.LeftOuter
+    ),
+    BLUitgeklapt = Table.ExpandTableColumn(
+        MetBL, "BLLookup",
+        {"Systeemcode"}, {"BUSINESS_LINE_CODE"}
+    ),
+
+    // Koppel GENDER systeemcode
+    MetGender = Table.NestedJoin(
+        BLUitgeklapt, "GENDER",
+        Bron_GenderCodes, "XML waarde",
+        "GenderLookup", JoinKind.LeftOuter
+    ),
+    GenderUitgeklapt = Table.ExpandTableColumn(
+        MetGender, "GenderLookup",
+        {"Systeemcode"}, {"GENDER_CODE"}
+    )
+
+in
+    GenderUitgeklapt
+
+
+----------------------------------------------------------------
+QUERY 7: Logica_NaamTelefoon
+----------------------------------------------------------------
+let
+    Bron = Logica_Lookups,
+
+    // ============================================================
+    // HULPFUNCTIES
+    // ============================================================
+
+    FnTussenvoegsel = (naam as text) as text =>
+        if Text.Contains(naam, " ")
+        then Text.Start(naam,
+                 Text.Length(naam)
+                 - Text.Length(Text.AfterDelimiter(naam, " ", {0, RelativePosition.FromEnd}))
+                 - 1)
+        else "",
+
+    FnAchternaam = (naam as text) as text =>
+        Text.AfterDelimiter(naam, " ", {0, RelativePosition.FromEnd}),
+
+    FnVoorletter = (voornaam as text) as text =>
+        if Text.Length(voornaam) > 0
+        then Text.Start(voornaam, 1) & "."
+        else "",
+
+    FnTelefoon = (nr as text) as text =>
+        if nr = null or nr = ""
+        then ""
+        else "0000" & Text.End(Text.Select(nr, {"0".."9"}), 9),
+
+    FnGender = (code as text) as text =>
+        let match = Table.SelectRows(Bron_GenderCodes, each [#"XML waarde"] = code)
+        in if Table.RowCount(match) > 0
+           then match{0}[Systeemcode] ?? ""
+           else "",
+
+    // Bestaande GENDER_CODE kolommen verwijderen
+    BestaandeGenderKolommen = List.Select(
+        Table.ColumnNames(Bron),
+        each _ = "GENDER_CODE" or Text.StartsWith(_, "GENDER_CODE_")
+    ),
+    ZonderGenderCode = Table.RemoveColumns(Bron, BestaandeGenderKolommen),
+
+    // Detecteer aantal debiteurgroepen
+    AlleKolommen = Table.ColumnNames(ZonderGenderCode),
+    AantalDebiteuren = List.Count(
+        List.Select(AlleKolommen, each _ = "DEBTOR_NAME1" or Text.StartsWith(_, "DEBTOR_NAME1_"))
+    ),
+    Suffixen = List.Transform(
+        {0..AantalDebiteuren - 1},
+        each if _ = 0 then "" else "_" & Text.From(_)
+    ),
+
+    // Transformaties per debiteurgroep
+    VerwerkDebiteur = (tabel as table, suffix as text) as table =>
+        let
+            n1     = "DEBTOR_NAME1"  & suffix,
+            n2     = "DEBTOR_NAME2"  & suffix,
+            gender = "GENDER"        & suffix,
+            phone  = "PHONE_NUMBER"  & suffix,
+            bl     = "BUSINESS_LINE",
+
+            Stap1 = Table.AddColumn(tabel, "TUSSENVOEGSEL" & suffix, each
+                if Record.Field(_, bl) = "B2C"
+                    and Record.Field(_, n1) <> null
+                    and Record.Field(_, n1) <> ""
+                then FnTussenvoegsel(Record.Field(_, n1))
+                else ""
+            , type text),
+
+            Stap2 = Table.AddColumn(Stap1, "ACHTERNAAM" & suffix, each
+                if Record.Field(_, bl) = "B2C"
+                    and Record.Field(_, n1) <> null
+                    and Record.Field(_, n1) <> ""
+                then FnAchternaam(Record.Field(_, n1))
+                else ""
+            , type text),
+
+            Stap3 = Table.AddColumn(Stap2, "VOORLETTER" & suffix, each
+                if Record.Field(_, bl) = "B2C"
+                    and Record.Field(_, n2) <> null
+                    and Record.Field(_, n2) <> ""
+                then FnVoorletter(Record.Field(_, n2))
+                else ""
+            , type text),
+
+            Stap4 = Table.TransformColumns(Stap3, {
+                {phone, each FnTelefoon(_ ?? ""), type text}
+            }),
+
+            Stap5 = Table.AddColumn(Stap4, "GENDER_CODE" & suffix, each
+                let g = Record.Field(_, gender) in
+                if g = null or g = "" then ""
+                else FnGender(g)
+            , type text)
+        in
+            Stap5,
+
+    NaTransformaties = List.Accumulate(
+        Suffixen,
+        ZonderGenderCode,
+        (staat, suffix) => VerwerkDebiteur(staat, suffix)
+    ),
+
+    // AMOUNT_EUR omzetten naar decimaal
+    MetBedrag = Table.TransformColumns(NaTransformaties, {
+        {"AMOUNT_EUR", each
+            if _ = null or _ = "" then null
+            else Number.FromText(
+                Text.Replace(Text.Replace(_, ",", "."), " ", ""),
+                "en-US"
+            )
+        , type number}
+    }),
+
+    // Datumvelden omzetten naar d-M-yyyy
+    MetDatums = Table.TransformColumns(MetBedrag, {
+        {"AMOUNT_DATE", each
+            if _ = null or _ = "" then ""
+            else Date.ToText(Date.From(DateTime.From(_)), [Format="d-M-yyyy"])
+        , type text},
+        {"DUE_DATE", each
+            if _ = null or _ = "" then ""
+            else Date.ToText(Date.From(DateTime.From(_)), [Format="d-M-yyyy"])
+        , type text},
+        {"BIRTH_DATE", each
+            if _ = null or _ = "" then ""
+            else Date.ToText(Date.From(DateTime.From(_)), [Format="d-M-yyyy"])
+        , type text}
+    }),
+
+    // Alle tekstvelden opschonen
+    Opgeschoond = Table.TransformColumns(MetDatums, {},
+        each if _ is text
+             then Text.Trim(Text.Replace(Text.Replace(_, "#(lf)", " "), "#(cr)", " "))
+             else _
+    )
+
+in
+    Opgeschoond
+
+
+----------------------------------------------------------------
+QUERY 8: Logica_Factuuromschrijvingen
+----------------------------------------------------------------
+let
+    Bron = Logica_NaamTelefoon,
+
+    MetFactuur = Table.NestedJoin(
+        Bron, "PCT_CLIENT_NAME",
+        Bron_Factuuromschrijvingen, "CLIENT_NAME (uit XML)",
+        "FactuurLookup", JoinKind.LeftOuter
+    ),
+    FactuurUitgeklapt = Table.ExpandTableColumn(
+        MetFactuur, "FactuurLookup",
+        {"Standaard omschrijving"}, {"FACTUUROMSCHRIJVING"}
+    )
+
+in
+    FactuurUitgeklapt
+
+
+----------------------------------------------------------------
+QUERY 9: EOS_Eindtabel
+----------------------------------------------------------------
+let
+    Bron = Logica_Factuuromschrijvingen,
+
+    // Detecteer aantal debiteurgroepen
+    AlleKolommen = Table.ColumnNames(Bron),
+    AantalDebiteuren = List.Count(
+        List.Select(AlleKolommen, each _ = "DEBTOR_NAME1" or Text.StartsWith(_, "DEBTOR_NAME1_"))
+    ),
+    Suffixen = List.Transform(
+        {0..AantalDebiteuren - 1},
+        each if _ = 0 then "" else "_" & Text.From(_)
+    ),
+
+    // Vaste kolommen vooraan
+    VasteKolommenVoor = {
+        "PARTNER_CASE_ID",
+        "MAPSJABLOON",
+        "BUSINESS_LINE_CODE"
+    },
+
+    // Financiën (altijd vast)
+    FinanciënKolommen = {
+        "DOCUMENT_NUMBER",
+        "AMOUNT_EUR",
+        "AMOUNT_DATE",
+        "FACTUUROMSCHRIJVING"
+    },
+
+    // Debiteurkolommen dynamisch opbouwen
+    DebiteurKolommen = List.Combine(
+        List.Transform(Suffixen, (s) => {
+            "DEBTOR_NAME1"   & s,
+            "TUSSENVOEGSEL"  & s,
+            "ACHTERNAAM"     & s,
+            "DEBTOR_NAME2"   & s,
+            "VOORLETTER"     & s,
+            "GENDER_CODE"    & s,
+            "BIRTH_DATE"     & s,
+            "CONTACT_PERSON" & s,
+            "ADDRESS_LINE1"  & s,
+            "ZIPCODE"        & s,
+            "CITY"           & s,
+            "COUNTRY_CODE"   & s,
+            "PHONE_NUMBER"   & s,
+            "EMAIL"          & s
+        })
+    ),
+
+    // Volledige kolomvolgorde
+    AlleSelectieKolommen = VasteKolommenVoor & FinanciënKolommen & DebiteurKolommen,
+
+    // Alleen bestaande kolommen selecteren
+    BestaandeKolommen = List.Intersect({AlleSelectieKolommen, AlleKolommen}),
+
+    Eindtabel = Table.SelectColumns(Bron, BestaandeKolommen)
+
+in
+    Eindtabel
+
+
+----------------------------------------------------------------
+QUERY 10: Validatie_Checks
+----------------------------------------------------------------
+let
+    Bron = Logica_Factuuromschrijvingen,
+
+    LijktOpPostcode = (tekst as text) as logical =>
+        if tekst = null or tekst = "" then false
+        else Value.Is(Value.FromText(Text.Start(tekst, 1)), type number),
+
+    BevatCijfer = (tekst as text) as logical =>
+        if tekst = null or tekst = "" then false
+        else Text.Length(Text.Select(tekst, {"0".."9"})) > 0,
+
+    // Check 1: Ontbrekend Mapsjabloon
+    Check_Mapsjabloon = Table.SelectRows(Bron, each
+        [MAPSJABLOON] = null or [MAPSJABLOON] = ""
+    ),
+    MetReden_Mapsjabloon = Table.AddColumn(Check_Mapsjabloon, "VALIDATIE_REDEN",
+        each "Geen Mapsjabloon gevonden voor klant: " & ([PCT_CLIENT_NAME] ?? "onbekend")
+    , type text),
+
+    // Check 2: Leeg ADDRESS_LINE1
+    Check_Adres1 = Table.SelectRows(Bron, each
+        [ADDRESS_LINE1] = null or [ADDRESS_LINE1] = ""
+    ),
+    MetReden_Adres1 = Table.AddColumn(Check_Adres1, "VALIDATIE_REDEN",
+        each "ADDRESS_LINE1 is leeg"
+    , type text),
+
+    // Check 3: Leeg ZIPCODE
+    Check_Zipcode = Table.SelectRows(Bron, each
+        [ZIPCODE] = null or [ZIPCODE] = ""
+    ),
+    MetReden_Zipcode = Table.AddColumn(Check_Zipcode, "VALIDATIE_REDEN",
+        each "ZIPCODE is leeg"
+    , type text),
+
+    // Check 4: Leeg CITY
+    Check_City = Table.SelectRows(Bron, each
+        [CITY] = null or [CITY] = ""
+    ),
+    MetReden_City = Table.AddColumn(Check_City, "VALIDATIE_REDEN",
+        each "CITY is leeg"
+    , type text),
+
+    // Check 5: Leeg COUNTRY_CODE
+    Check_Country = Table.SelectRows(Bron, each
+        [COUNTRY_CODE] = null or [COUNTRY_CODE] = ""
+    ),
+    MetReden_Country = Table.AddColumn(Check_Country, "VALIDATIE_REDEN",
+        each "COUNTRY_CODE is leeg"
+    , type text),
+
+    // Check 6: Verschoven adres
+    Check_Verschoven = Table.SelectRows(Bron, each
+        [CITY] <> null and [CITY] <> "" and LijktOpPostcode([CITY])
+    ),
+    MetReden_Verschoven = Table.AddColumn(Check_Verschoven, "VALIDATIE_REDEN",
+        each "Verschoven adres: CITY bevat mogelijk een postcode (" & [CITY] & ")"
+    , type text),
+
+    // Check 7: Geen huisnummer (alleen NLD)
+    Check_Huisnummer = Table.SelectRows(Bron, each
+        [COUNTRY_CODE] = "NLD"
+        and [ADDRESS_LINE1] <> null and [ADDRESS_LINE1] <> ""
+        and not BevatCijfer([ADDRESS_LINE1])
+    ),
+    MetReden_Huisnummer = Table.AddColumn(Check_Huisnummer, "VALIDATIE_REDEN",
+        each "Geen huisnummer gevonden in ADDRESS_LINE1 (NLD): " & [ADDRESS_LINE1]
+    , type text),
+
+    // Alle checks samenvoegen
+    AlleChecks = Table.Combine({
+        MetReden_Mapsjabloon,
+        MetReden_Adres1,
+        MetReden_Zipcode,
+        MetReden_City,
+        MetReden_Country,
+        MetReden_Verschoven,
+        MetReden_Huisnummer
+    }),
+
+    // Relevante kolommen tonen
+    Eindtabel = Table.SelectColumns(AlleChecks, {
+        "VALIDATIE_REDEN",
+        "PARTNER_CASE_ID",
+        "MAPSJABLOON",
+        "PCT_CLIENT_NAME",
+        "DEBTOR_NAME1",
+        "DEBTOR_NAME2",
+        "ADDRESS_LINE1",
+        "ZIPCODE",
+        "CITY",
+        "COUNTRY_CODE"
+    }),
+
+    Gesorteerd = Table.Sort(Eindtabel, {{"VALIDATIE_REDEN", Order.Ascending}})
+
+in
+    Gesorteerd
