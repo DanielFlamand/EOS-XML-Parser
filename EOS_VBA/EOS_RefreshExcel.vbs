@@ -6,7 +6,7 @@
 Dim oExcel
 Dim oWorkbook
 Dim sBestand
-Dim sResultaat
+Dim iFile
 
 sBestand = "C:\Users\dflamand\Ultimoo Groep\Proces & Innovatie - IT support en development - IT support en development\PowerQuery\EOS XML aanlevering\EOS_Import_Template.xlsm"
 
@@ -21,9 +21,7 @@ oExcel.DisplayAlerts = False
 Set oWorkbook = oExcel.Workbooks.Open(sBestand)
 
 If Err.Number <> 0 Then
-    ' Fout bij openen bestand
-    Dim iFile
-    iFile = FreeFile()
+    iFile = FreeFile
     Open "C:\Temp\eos_refresh_result.txt" For Output As #iFile
     Print #iFile, "FOUT: Kan bestand niet openen - " & Err.Description
     Close #iFile
@@ -32,18 +30,16 @@ If Err.Number <> 0 Then
     WScript.Quit 1
 End If
 
-On Error Resume Next
+Err.Clear
 
 ' Macro uitvoeren
 oExcel.Run "VerversEnOpslaan"
 
 If Err.Number <> 0 Then
-    ' Fout bij uitvoeren macro
-    Dim iFile2
-    iFile2 = FreeFile()
-    Open "C:\Temp\eos_refresh_result.txt" For Output As #iFile2
-    Print #iFile2, "FOUT: Macro mislukt - " & Err.Description
-    Close #iFile2
+    iFile = FreeFile
+    Open "C:\Temp\eos_refresh_result.txt" For Output As #iFile
+    Print #iFile, "FOUT: Macro mislukt - " & Err.Description
+    Close #iFile
 End If
 
 ' Excel netjes sluiten
